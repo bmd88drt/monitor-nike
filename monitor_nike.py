@@ -88,7 +88,7 @@ def get_nike_price(url):
         return None, None
     except Exception as e:
         print(f"Error occurred: {e}")
-        return None
+        return None, None
     finally:
         if driver:
             try:
@@ -119,33 +119,29 @@ def main():
     if not bot_token or not chat_id:
         print("Warning: Telegram configuration missing. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.")
     
-    price, installments_text = get_nike_price(url)
+    result = get_nike_price(url)
     
-    if price is not None:
+    if result != (None, None):
+        price, installments_text = result
         print(f"Current price found: R$ {price:.2f}")
         if installments_text:
             print(f"Installments info: {installments_text}")
             
-        # We will strictly follow the rule: < 300 
+        # Envia sempre a notificação, com destaque se for menor que 300
         if price <= 300.00:
-            message = f"🚨 <b>Preço Baixou!</b> 🚨\n\nO Tênis Nike Precision 7 Masculino está custando <b>R$ {price:.2f} no Pix!</b>\n\n"
-            if installments_text:
-                message += f"💳 Parcelamento: <i>{installments_text}</i>\n\n"
-            message += f"🛒 Link: {url}"
-            
-            if bot_token and chat_id:
-                send_telegram_message(bot_token, chat_id, message)
-            else:
-                print("Would have sent message, but no Telegram credentials found.")
+            message = f"🚨 <b>ALERTA DE PREÇO BAIXO!</b> 🚨\n\nO Tênis Nike Precision 7 Masculino bateu a sua meta e está por <b>R$ {price:.2f} no Pix!</b>\n\n"
         else:
-            print(f"Price is R$ {price:.2f}, which is above R$ 300.00. No notification sent.")
+            message = f"👟 <b>Atualização Diária de Preço</b>\n\nO tênis Nike Precision 7 Masculino está custando:\n<b>R$ {price:.2f} no Pix!</b>\n\n"
             
-            # For demonstration during testing, if we run locally and want to ensure the bot works:
-            if os.getenv("TEST_MODE") == "1" and bot_token and chat_id:
-                msg = f"🧪 <b>Teste do Robô</b>\n\nO robô está funcionando!\nPreço atual lido: <b>R$ {price:.2f} no Pix</b>\n"
-                if installments_text:
-                    msg += f"💳 Parcelamento: <i>{installments_text}</i>"
-                send_telegram_message(bot_token, chat_id, msg)
+        if installments_text:
+            message += f"💳 Parcelamento: <i>{installments_text}</i>\n\n"
+            
+        message += f"🛒 Link: {url}"
+        
+        if bot_token and chat_id:
+            send_telegram_message(bot_token, chat_id, message)
+        else:
+            print("Would have sent message, but no Telegram credentials found.")
 
     else:
         print("Failed to retrieve the price.")
