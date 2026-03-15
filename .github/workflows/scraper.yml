@@ -2,8 +2,8 @@ name: Nike Price Scraper
 
 on:
   schedule:
-    # Runs every day at 12:00 UTC
-    - cron: '0 12 * * *'
+    # Corre no horário UTC (Brasília é UTC-3). 11h=08h BRT, 15h=12h BRT, 23h=20h BRT
+    - cron: '0 11,15,23 * * *'
   workflow_dispatch: # Allows manual trigger
 
 jobs:
@@ -40,6 +40,7 @@ jobs:
       env:
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
         TEST_MODE: "0"
       run: |
         xvfb-run -a python monitor_nike.py
