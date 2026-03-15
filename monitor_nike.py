@@ -2,19 +2,33 @@ import os
 import re
 import time
 import requests
-from seleniumbase import SB
 from bs4 import BeautifulSoup
 
 def get_nike_price(url):
-    try:
-        # Using SeleniumBase in UC (undetected_chromedriver) mode for better Akamai bypass
-        with SB(uc=True, headless=False) as sb:
-            # uc_open_with_reconnect performs better for anti-bot than standard driver.get
-            sb.uc_open_with_reconnect(url, 4)
-            sb.sleep(15) # Wait for page to fully load and Akamai to pass
-            html = sb.get_page_source()
+    api_key = os.getenv("SCRAPINGANT_API_KEY")
+    if not api_key:
+        print("Error: SCRAPINGANT_API_KEY environment variable not set.")
+        return None, None
 
+    # Payload explicitly asks ScrapingAnt to use a browser and residential proxy in Brazil
+    payload = {
+        'url': url,
+        'x-api-key': api_key,
+        'browser': 'true',
+        'proxy_type': 'residential',
+        'proxy_country': 'br'
+    }
+
+    try:
+        print("Sending request via ScrapingAnt API...")
+        response = requests.get('https://api.scrapingant.com/v2/general', params=payload, timeout=60)
         
+        if response.status_code != 200:
+            print(f"ScrapingAnt failed with status code: {response.status_code}\n{response.text}")
+            return None, None
+
+        html = response.text
+
         soup = BeautifulSoup(html, 'html.parser')
         
         # O preço do PIX costuma ter a string "no Pix" logo depois, ou "Pix" na tag filha.
@@ -76,9 +90,12 @@ def get_nike_price(url):
             
         print("Price not found in HTML. Check if Akamai blocked the request.")
         return None, None
+    except requests.exceptions.Timeout:
+        print("Request to ScrapingAnt timed out.")
+        return None, None
     except Exception as e:
         print(f"Error occurred: {e}")
-        return None
+        return None, None
 
 def send_telegram_message(bot_token, chat_id, message):
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
@@ -177,7 +194,7 @@ def main():
         
         if should_send_telegram:
             # Envia a notificação, com destaque se for menor que 300
-            if price <= 300.00:
+            if price and price <= 300.00:
                 message = f"🚨 <b>ALERTA DE PREÇO BAIXO!</b> 🚨\n\nO Tênis Nike Precision 7 Masculino bateu a sua meta e está por <b>R$ {price:.2f} no Pix!</b>\n\n"
             else:
                 message = f"👟 <b>Atualização Diária de Preço (12:00)</b>\n\nO tênis Nike Precision 7 Masculino está custando:\n<b>R$ {price:.2f} no Pix!</b>\n\n"
