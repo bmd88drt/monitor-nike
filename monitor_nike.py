@@ -2,28 +2,18 @@ import os
 import re
 import time
 import requests
-import undetected_chromedriver as uc
+from seleniumbase import SB
 from bs4 import BeautifulSoup
 
 def get_nike_price(url):
-    options = uc.ChromeOptions()
-    options.headless = False
-    
-    display = None
-    if os.name == 'posix':
-        from pyvirtualdisplay import Display
-        display = Display(visible=0, size=(1024, 768))
-        display.start()
-        options.add_argument('--no-sandbox')
-        options.add_argument('--disable-dev-shm-usage')
-
-    driver = None
     try:
-        # Pega a versão 145 fixada para evitar o erro do Chrome 145 / Driver 146 no GitHub
-        driver = uc.Chrome(options=options, version_main=145)
-        driver.get(url)
-        time.sleep(15) # Wait for page to fully load and Akamai to pass
-        html = driver.page_source
+        # Using SeleniumBase in UC (undetected_chromedriver) mode for better Akamai bypass
+        with SB(uc=True, headless=False) as sb:
+            # uc_open_with_reconnect performs better for anti-bot than standard driver.get
+            sb.uc_open_with_reconnect(url, 4)
+            sb.sleep(15) # Wait for page to fully load and Akamai to pass
+            html = sb.get_page_source()
+
         
         soup = BeautifulSoup(html, 'html.parser')
         
@@ -89,14 +79,6 @@ def get_nike_price(url):
     except Exception as e:
         print(f"Error occurred: {e}")
         return None
-    finally:
-        if driver:
-            try:
-                driver.quit()
-            except:
-                pass
-        if display:
-            display.stop()
 
 def send_telegram_message(bot_token, chat_id, message):
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
@@ -170,7 +152,7 @@ def main():
     
     result = get_nike_price(url)
     
-    if result != (None, None):
+    if result and result != (None, None):
         price, installments_text = result
         print(f"Current price found: R$ {price:.2f}")
         if installments_text:
