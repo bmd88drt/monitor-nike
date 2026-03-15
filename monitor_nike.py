@@ -88,7 +88,7 @@ def get_nike_price(url):
         return None, None
     except Exception as e:
         print(f"Error occurred: {e}")
-        return None, None
+        return None
     finally:
         if driver:
             try:
@@ -111,10 +111,59 @@ def send_telegram_message(bot_token, chat_id, message):
     else:
         print(f"Failed to send notification: {response.text}")
 
+import json
+from datetime import datetime, timezone, timedelta
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+
+# --- (O código das bibliotecas originais permanece no topo do arquivo. Vamos adicionar as novas de google no começo do arquivo logo)
+
+def add_to_google_sheets(creds_json, price):
+    try:
+        # Define escopos para a API
+        scope = [
+            'https://spreadsheets.google.com/feeds',
+            'https://www.googleapis.com/auth/drive'
+        ]
+        
+        # Carrega credenciais do JSON string
+        creds_dict = json.loads(creds_json)
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        
+        # Autoriza o cliente
+        client = gspread.authorize(creds)
+        
+        # Abre a planilha pelo nome exato (o usuário precisa ter criado uma planilha chamada "Preço Nike")
+        # Mas para evitar erro caso o nome seja outro, vamos instruir a colocar por ID futuramente.
+        # Por hora, vamos prever que o nome deve ser "Preco Nike" ou "Preço Nike"
+        try:
+            sheet = client.open("Preço Nike").sheet1
+        except gspread.exceptions.SpreadsheetNotFound:
+            try:
+                sheet = client.open("Preco Nike").sheet1
+            except gspread.exceptions.SpreadsheetNotFound:
+                print("Spreadsheet 'Preço Nike' not found. Please create it and share it with the service account email.")
+                return False
+
+        # Prepara os dados (Data/Hora em Brasília e o Preço)
+        brt_timezone = timezone(timedelta(hours=-3))
+        now_brt = datetime.now(brt_timezone)
+        date_str = now_brt.strftime("%d/%m/%Y")
+        time_str = now_brt.strftime("%H:%M:%S")
+        
+        # Adiciona a linha (Data, Hora, Preço)
+        sheet.append_row([date_str, time_str, f"R$ {price:.2f}"])
+        print("Price successfully logged to Google Sheets.")
+        return True
+    except Exception as e:
+        print(f"Failed to log to Google Sheets: {e}")
+        return False
+
 def main():
     url = "https://www.nike.com.br/tenis-nike-precision-7-masculino-028985.html?cor=5A"
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    google_creds = os.getenv("GOOGLE_CREDENTIALS_JSON")
     
     if not bot_token or not chat_id:
         print("Warning: Telegram configuration missing. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.")
@@ -127,21 +176,41 @@ def main():
         if installments_text:
             print(f"Installments info: {installments_text}")
             
-        # Envia sempre a notificação, com destaque se for menor que 300
-        if price <= 300.00:
-            message = f"🚨 <b>ALERTA DE PREÇO BAIXO!</b> 🚨\n\nO Tênis Nike Precision 7 Masculino bateu a sua meta e está por <b>R$ {price:.2f} no Pix!</b>\n\n"
+        # 1. Log to Google Sheets
+        if google_creds:
+            add_to_google_sheets(google_creds, price)
         else:
-            message = f"👟 <b>Atualização Diária de Preço</b>\n\nO tênis Nike Precision 7 Masculino está custando:\n<b>R$ {price:.2f} no Pix!</b>\n\n"
-            
-        if installments_text:
-            message += f"💳 Parcelamento: <i>{installments_text}</i>\n\n"
-            
-        message += f"🛒 Link: {url}"
+            print("Warning: GOOGLE_CREDENTIALS_JSON not found. Skipping Google Sheets logging.")
+
+        # 2. Telegram Notification Logic (Only at 12:00 BRT -> 15:00 UTC)
+        # We need to check the current UTC hour. The cron action runs at 11, 15, and 23 UTC.
+        current_utc_hour = datetime.utcnow().hour
         
-        if bot_token and chat_id:
-            send_telegram_message(bot_token, chat_id, message)
+        # Test mode should always send
+        is_test_mode = os.getenv("TEST_MODE") == "1"
+        
+        # Telegram alert condition: test mode OR (it's around 15 UTC, which is 12 BRT)
+        # We allow a small window (14 to 16) in case the runner is delayed.
+        should_send_telegram = is_test_mode or (14 <= current_utc_hour <= 16)
+        
+        if should_send_telegram:
+            # Envia a notificação, com destaque se for menor que 300
+            if price <= 300.00:
+                message = f"🚨 <b>ALERTA DE PREÇO BAIXO!</b> 🚨\n\nO Tênis Nike Precision 7 Masculino bateu a sua meta e está por <b>R$ {price:.2f} no Pix!</b>\n\n"
+            else:
+                message = f"👟 <b>Atualização Diária de Preço (12:00)</b>\n\nO tênis Nike Precision 7 Masculino está custando:\n<b>R$ {price:.2f} no Pix!</b>\n\n"
+                
+            if installments_text:
+                message += f"💳 Parcelamento: <i>{installments_text}</i>\n\n"
+                
+            message += f"🛒 Link: {url}"
+            
+            if bot_token and chat_id:
+                send_telegram_message(bot_token, chat_id, message)
+            else:
+                print("Would have sent message, but no Telegram credentials found.")
         else:
-            print("Would have sent message, but no Telegram credentials found.")
+            print(f"Not sending Telegram notification. Current UTC hour is {current_utc_hour}. Notifications are only scheduled for 15:00 UTC (12:00 BRT).")
 
     else:
         print("Failed to retrieve the price.")
