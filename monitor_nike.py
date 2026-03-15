@@ -19,6 +19,7 @@ def get_nike_price(url):
 
     driver = None
     try:
+        # Pega a versão 145 fixada para evitar o erro do Chrome 145 / Driver 146 no GitHub
         driver = uc.Chrome(options=options, version_main=145)
         driver.get(url)
         time.sleep(15) # Wait for page to fully load and Akamai to pass
@@ -26,24 +27,65 @@ def get_nike_price(url):
         
         soup = BeautifulSoup(html, 'html.parser')
         
-        # Look for the price. Nike usually uses spans or divs with the price formatted as R$ 1.234,56
-        price_texts = soup.find_all(string=re.compile(r'R\$\s*\d+'))
-        prices = []
-        for text in price_texts:
-            match = re.search(r'R\$\s*(\d{1,3}(?:\.\d{3})*,\d{2})', text)
-            if match:
-                price_str = match.group(1).replace('.', '').replace(',', '.')
-                prices.append(float(price_str))
+        # O preço do PIX costuma ter a string "no Pix" logo depois, ou "Pix" na tag filha.
+        # Vamos procurar todo texto com R$. Nota: o site usa \xa0 (non-breaking space) entre R$ e os números.
+        pix_price = None
+        installments_text = None
+
+        # Procura textos que tenham R$ seguido de espaços comuns ou non-breaking e números
+        text_nodes = soup.find_all(string=re.compile(r'R\$\s*\xa0*\s*\d+'))
+        
+        for text in text_nodes:
+            # Pega o texto do elemento inteiro (do pai) ou do pai do pai para garantir que "Pix" seja capturado se estiver em tag adjacente
+            parent_text = text
+            if text.parent and text.parent.parent:
+                parent_text = text.parent.parent.text
+            elif text.parent:
+                parent_text = text.parent.text
                 
-        if prices:
-            # We assume the lowest valid price found is the current price (in case of discounts)
-            # Sometimes parsing pulls other irrelevant R$ numbers, let's filter those realistically > 50
-            valid_prices = [p for p in prices if p > 50]
-            if valid_prices:
-                return min(valid_prices)
+            parent_lower = parent_text.lower()
+            
+            # Tenta achar valor do Pix
+            if 'pix' in parent_lower:
+                match = re.search(r'R\$\s*\xa0*\s*(\d{1,3}(?:\.\d{3})*,\d{2})', parent_text)
+                if match:
+                    price_str = match.group(1).replace('.', '').replace(',', '.')
+                    pix_price = float(price_str)
+                    
+            # Tenta achar valor de parcela (ex: "ou 4x de R$ 112,50 sem juros")
+            if 'sem juros' in parent_lower and 'x' in parent_lower:
+                match = re.search(r'(?:ou\s*)?(\d+x\s*de\s*R\$\s*\xa0*\s*\d{1,3}(?:\.\d{3})*,\d{2}\s*sem\s*juros)', parent_lower, re.IGNORECASE)
+                if match:
+                    installments_text = match.group(1).strip().capitalize()
+                    # Normalizar espaços
+                    installments_text = re.sub(r'\s+', ' ', installments_text).replace('\xa0', ' ')
+                else:
+                    installments_text = parent_text.strip().replace('\xa0', ' ')
+                
+        # Fallback: Se não achou algo com Pix explicitamente, mas achou outras coisas:
+        if pix_price is None:
+            prices = []
+            for text in text_nodes:
+                match = re.search(r'R\$\s*\xa0*\s*(\d{1,3}(?:\.\d{3})*,\d{2})', text)
+                if match:
+                    price_str = match.group(1).replace('.', '').replace(',', '.')
+                    val = float(price_str)
+                    if val > 50 and val < 3000: # Remove valores absurdos ou de parcelas isoladas
+                        prices.append(val)
+            if prices:
+                # Ordenar
+                prices.sort(reverse=True)
+                # O segundo maior valor costuma ser o de venda (o primeiro é o original riscado)
+                if len(prices) >= 2:
+                    pix_price = prices[1]
+                elif len(prices) == 1:
+                    pix_price = prices[0]
+
+        if pix_price:
+            return pix_price, installments_text
             
         print("Price not found in HTML. Check if Akamai blocked the request.")
-        return None
+        return None, None
     except Exception as e:
         print(f"Error occurred: {e}")
         return None
@@ -77,14 +119,20 @@ def main():
     if not bot_token or not chat_id:
         print("Warning: Telegram configuration missing. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.")
     
-    price = get_nike_price(url)
+    price, installments_text = get_nike_price(url)
     
     if price is not None:
         print(f"Current price found: R$ {price:.2f}")
-        # Always send a message for testing purposes if it's the first run, or condition it:
+        if installments_text:
+            print(f"Installments info: {installments_text}")
+            
         # We will strictly follow the rule: < 300 
         if price <= 300.00:
-            message = f"🚨 <b>Preço Baixou!</b> 🚨\n\nO Tênis Nike Precision 7 Masculino está custando <b>R$ {price:.2f}</b>!\n\nLink: {url}"
+            message = f"🚨 <b>Preço Baixou!</b> 🚨\n\nO Tênis Nike Precision 7 Masculino está custando <b>R$ {price:.2f} no Pix!</b>\n\n"
+            if installments_text:
+                message += f"💳 Parcelamento: <i>{installments_text}</i>\n\n"
+            message += f"🛒 Link: {url}"
+            
             if bot_token and chat_id:
                 send_telegram_message(bot_token, chat_id, message)
             else:
@@ -94,7 +142,9 @@ def main():
             
             # For demonstration during testing, if we run locally and want to ensure the bot works:
             if os.getenv("TEST_MODE") == "1" and bot_token and chat_id:
-                msg = f"🧪 <b>Teste do Robô</b>\n\nO robô está funcionando! Preço atual lido: R$ {price:.2f}"
+                msg = f"🧪 <b>Teste do Robô</b>\n\nO robô está funcionando!\nPreço atual lido: <b>R$ {price:.2f} no Pix</b>\n"
+                if installments_text:
+                    msg += f"💳 Parcelamento: <i>{installments_text}</i>"
                 send_telegram_message(bot_token, chat_id, msg)
 
     else:
