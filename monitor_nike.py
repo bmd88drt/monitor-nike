@@ -19,7 +19,7 @@ def get_nike_price(url):
 
     driver = None
     try:
-        driver = uc.Chrome(options=options)
+        driver = uc.Chrome(options=options, version_main=145)
         driver.get(url)
         time.sleep(15) # Wait for page to fully load and Akamai to pass
         html = driver.page_source
